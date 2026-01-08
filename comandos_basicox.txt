@@ -1,0 +1,7 @@
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8010 #correr el api
+CREATE USER sst_user WITH PASSWORD 'sstpass123'; #countdb
+GRANT ALL PRIVILEGES ON DATABASE sstdb TO sst_user;
+postgresql+psycopg2://sst_user:sstpass123@localhost:5432/sstdb #connection db
+& C:/Users/Metrica/Documents/projects-exc/sst-backend/.venv/Scripts/Activate.ps1
+alembic upgrade base
+alembic downgrade base

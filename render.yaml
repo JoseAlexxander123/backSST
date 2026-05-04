@@ -6,7 +6,7 @@ services:
     region: oregon
     autoDeployTrigger: commit
     buildCommand: pip install -r requirements.txt
-    startCommand: sh -c 'alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT'
+    startCommand: sh -c 'attempt=1; until alembic upgrade head; do if [ "$attempt" -ge 5 ]; then exit 1; fi; echo "Database not ready, retrying migrations in 5s..."; attempt=$((attempt + 1)); sleep 5; done; uvicorn app.main:app --host 0.0.0.0 --port $PORT'
     healthCheckPath: /health
     envVars:
       - key: APP_ENV

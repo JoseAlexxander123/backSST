@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import List, Optional
+from urllib.parse import urlparse
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 
@@ -16,6 +17,16 @@ class ModuleOut(BaseModel):
     quiz_required: bool = True
     checklist_section_id: Optional[int] = None
     owner_id: Optional[int] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ChecklistSectionOptionOut(BaseModel):
+    id: int
+    title: str
+    status: str
+    percentage: int
+    checklist_module_id: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -105,6 +116,32 @@ class ModuleCreateRequest(BaseModel):
     checklist_section_id: Optional[int] = None
     quiz_required: bool = True
 
+    @field_validator("title", "description", "icon")
+    @classmethod
+    def validate_required_module_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Este campo es obligatorio")
+        return cleaned
+
+    @field_validator("color")
+    @classmethod
+    def validate_color(cls, value: str) -> str:
+        cleaned = value.strip()
+        if len(cleaned) != 7 or not cleaned.startswith("#"):
+            raise ValueError("color debe tener formato #RRGGBB")
+        try:
+            int(cleaned[1:], 16)
+        except ValueError as exc:
+            raise ValueError("color debe tener formato #RRGGBB") from exc
+        return cleaned.upper()
+
+    @model_validator(mode="after")
+    def validate_checklist_link(self):
+        if self.due_to_checklist and self.checklist_section_id is None:
+            raise ValueError("checklist_section_id es obligatorio cuando due_to_checklist=true")
+        return self
+
 
 class ModuleUpdateRequest(ModuleCreateRequest):
     pass
@@ -127,6 +164,29 @@ class LessonBaseRequest(BaseModel):
             raise ValueError("type debe ser video, document o interactive")
         return value
 
+    @field_validator("title", "duration")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Este campo es obligatorio")
+        return cleaned
+
+    @field_validator("description")
+    @classmethod
+    def normalize_description(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("display_order")
+    @classmethod
+    def validate_display_order(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("display_order debe ser mayor que cero")
+        return value
+
     @field_validator("content_mode")
     @classmethod
     def validate_content_mode(cls, value: str) -> str:
@@ -143,6 +203,9 @@ class LessonBaseRequest(BaseModel):
         cleaned = value.strip()
         if not (cleaned.startswith("http://") or cleaned.startswith("https://")):
             raise ValueError("external_url debe iniciar con http:// o https://")
+        hostname = (urlparse(cleaned).hostname or "").lower()
+        if hostname in {"example.com", "www.example.com"}:
+            raise ValueError("external_url no puede apuntar a example.com en contenido real")
         return cleaned
 
     @model_validator(mode="after")

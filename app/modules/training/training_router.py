@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.infrastructure.respository import get_db
 from app.modules.auth.auth_service import require_permissions
 from app.modules.training.training_schema import (
+    ChecklistSectionOptionOut,
     LessonCompletionRequest,
     LessonCompletionResponse,
     LessonCreateRequest,
@@ -33,6 +34,15 @@ def list_modules(
 ):
     service = TrainingService(db)
     return service.list_modules(current_user)
+
+
+@router.get("/checklist-sections", response_model=list[ChecklistSectionOptionOut])
+def list_training_checklist_sections(
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permissions(["training.manage"])),
+):
+    service = TrainingService(db)
+    return service.list_checklist_sections()
 
 
 @router.get("/modules/{module_id}/lessons", response_model=ModuleWithLessons)
@@ -137,7 +147,7 @@ def upload_lesson_content(
 
 
 @router.get("/modules/{module_id}/quiz", response_model=QuizOut)
-def get_quiz(module_id: int, db: Session = Depends(get_db), current_user=Depends(require_permissions(["training.view"]))):
+def get_quiz(module_id: int, db: Session = Depends(get_db), current_user=Depends(require_permissions(["training.quiz"]))):
     service = TrainingService(db)
     return service.get_quiz(module_id, current_user)
 

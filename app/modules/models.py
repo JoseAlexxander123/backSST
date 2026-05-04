@@ -140,6 +140,7 @@ class ChecklistItem(Base):
     section_id = Column(Integer, ForeignKey("checklist_sections.id"), nullable=False)
     text = Column(Text, nullable=False)
     status = Column(String, nullable=False, default="non-compliant")  # compliant | non-compliant
+    weight = Column(Integer, nullable=False, default=10)
 
     section = relationship("ChecklistSection", back_populates="items")
 

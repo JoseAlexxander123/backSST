@@ -6,9 +6,20 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.config.settings import settings
-from app.modules.models import Lesson, Module, ModuleAssignment, QuizAttempt, QuizOption, QuizQuestion, User, UserLessonProgress
+from app.modules.models import (
+    ChecklistSection,
+    Lesson,
+    Module,
+    ModuleAssignment,
+    QuizAttempt,
+    QuizOption,
+    QuizQuestion,
+    User,
+    UserLessonProgress,
+)
 from app.modules.training.training_schema import LessonCreateRequest
 from app.modules.training.training_schema import (
+    ChecklistSectionOptionOut,
     LessonOut,
     LessonUpdateRequest,
     ModuleAssignmentOut,
@@ -39,6 +50,19 @@ class TrainingService:
     def list_modules(self, current_user: User) -> List[ModuleOut]:
         modules = self._modules_for_user(current_user)
         return [self._build_module_out(module, current_user.id) for module in modules]
+
+    def list_checklist_sections(self) -> List[ChecklistSectionOptionOut]:
+        sections = self.db.query(ChecklistSection).order_by(ChecklistSection.id).all()
+        return [
+            ChecklistSectionOptionOut(
+                id=section.id,
+                title=section.title,
+                status=section.status,
+                percentage=section.percentage or 0,
+                checklist_module_id=section.module.id if section.module else None,
+            )
+            for section in sections
+        ]
 
     def module_lessons(self, module_id: int, current_user: User) -> ModuleWithLessons:
         module = self._get_module(module_id)
@@ -71,6 +95,7 @@ class TrainingService:
     def create_lesson(self, module_id: int, payload: LessonCreateRequest, current_user: User) -> LessonOut:
         module = self._get_module(module_id)
         self._ensure_can_manage_module(module, current_user)
+        self._ensure_unique_lesson_order(module.id, payload.display_order)
 
         lesson = Lesson(
             module_id=module.id,
@@ -80,7 +105,7 @@ class TrainingService:
             description=payload.description,
             display_order=payload.display_order,
             content_mode=payload.content_mode,
-            external_url=payload.external_url,
+            external_url=payload.external_url if payload.content_mode == "external_url" else None,
         )
         self.db.add(lesson)
         self.db.commit()
@@ -90,6 +115,7 @@ class TrainingService:
     def update_lesson(self, lesson_id: int, payload: LessonUpdateRequest, current_user: User) -> LessonOut:
         lesson = self._get_lesson(lesson_id)
         self._ensure_can_manage_module(lesson.module, current_user)
+        self._ensure_unique_lesson_order(lesson.module_id, payload.display_order, exclude_lesson_id=lesson.id)
 
         lesson.title = payload.title
         lesson.duration = payload.duration
@@ -97,7 +123,7 @@ class TrainingService:
         lesson.description = payload.description
         lesson.display_order = payload.display_order
         lesson.content_mode = payload.content_mode
-        lesson.external_url = payload.external_url
+        lesson.external_url = payload.external_url if payload.content_mode == "external_url" else None
         if payload.content_mode == "external_url":
             self.storage.delete_object(lesson.content_path)
             lesson.content_url = None
@@ -169,6 +195,7 @@ class TrainingService:
         return self._build_lesson_out(lesson, self._is_lesson_completed(lesson.id, current_user.id))
 
     def complete_lesson(self, lesson_id: int, current_user: User, completed: bool) -> Tuple[UserLessonProgress, Module]:
+        self._ensure_study_action_allowed(current_user)
         lesson = self.db.query(Lesson).filter(Lesson.id == lesson_id).first()
         if not lesson:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Leccion no encontrada")
@@ -196,8 +223,8 @@ class TrainingService:
         return progress, lesson.module
 
     def get_quiz(self, module_id: int, current_user: User) -> QuizOut:
-        module = self._get_module(module_id)
-        self._ensure_module_access(module_id, current_user)
+        self._ensure_study_action_allowed(current_user)
+        module = self._ensure_quiz_enabled_for_user(module_id, current_user)
 
         questions = (
             self.db.query(QuizQuestion)
@@ -221,7 +248,8 @@ class TrainingService:
         return QuizOut(module_id=module.id, module_title=module.title, questions=serialized_questions)  # type: ignore
 
     def submit_quiz(self, module_id: int, current_user: User, answers: List[dict]) -> QuizResult:
-        self._ensure_module_access(module_id, current_user)
+        self._ensure_study_action_allowed(current_user)
+        self._ensure_quiz_enabled_for_user(module_id, current_user)
 
         questions = (
             self.db.query(QuizQuestion)
@@ -236,6 +264,12 @@ class TrainingService:
             option.id: option for option in self.db.query(QuizOption).filter(QuizOption.question_id.in_([q.id for q in questions]))
         }
         answers_map = {a["question_id"]: a["option_id"] for a in answers}
+        missing_questions = [q.id for q in questions if q.id not in answers_map]
+        if missing_questions:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Debes responder todas las preguntas antes de enviar el quiz",
+            )
 
         correct = 0
         for q in questions:
@@ -268,6 +302,7 @@ class TrainingService:
         )
 
     def create_module(self, payload: ModuleCreateRequest, current_user: User) -> ModuleOut:
+        self._validate_module_checklist_link(payload.due_to_checklist, payload.checklist_section_id)
         module = Module(
             title=payload.title,
             description=payload.description,
@@ -286,6 +321,11 @@ class TrainingService:
     def update_module(self, module_id: int, payload: ModuleUpdateRequest, current_user: User) -> ModuleOut:
         module = self._get_module(module_id)
         self._ensure_can_manage_module(module, current_user)
+        self._validate_module_checklist_link(
+            payload.due_to_checklist,
+            payload.checklist_section_id,
+            exclude_module_id=module_id,
+        )
 
         module.title = payload.title
         module.description = payload.description
@@ -301,6 +341,29 @@ class TrainingService:
     def delete_module(self, module_id: int, current_user: User) -> None:
         module = self._get_module(module_id)
         self._ensure_can_manage_module(module, current_user)
+        if module.checklist_section_id is not None or module.due_to_checklist:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No se puede eliminar un modulo vinculado al checklist. Desvinculalo primero.",
+            )
+        if module.assignments:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No se puede eliminar un modulo con usuarios asignados. Quita las asignaciones primero.",
+            )
+        if module.lessons:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No se puede eliminar un modulo que todavia tiene lecciones. Eliminalas primero.",
+            )
+        if module.quiz_questions or module.quiz_attempts:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No se puede eliminar un modulo que ya tiene quiz o intentos registrados.",
+            )
+        for lesson in module.lessons:
+            self.storage.delete_object(lesson.thumbnail_path)
+            self.storage.delete_object(lesson.content_path)
         self.db.delete(module)
         self.db.commit()
 
@@ -317,6 +380,12 @@ class TrainingService:
         missing = user_ids - found_ids
         if missing:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Usuarios no encontrados: {sorted(list(missing))}")
+        invalid_users = sorted([u.email for u in users if not self._is_assignable_learning_user(u)])
+        if invalid_users:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Solo se pueden asignar modulos a usuarios de aprendizaje: {invalid_users}",
+            )
 
         existing = {
             ma.user_id
@@ -347,6 +416,7 @@ class TrainingService:
                 roles=[r.code for r in user.roles],
             )
             for user in users
+            if self._is_assignable_learning_user(user)
         ]
 
     def module_progress_report(self, module_id: int, current_user: User) -> ModuleProgressOut:
@@ -417,14 +487,14 @@ class TrainingService:
 
     def _modules_for_user(self, current_user: User) -> List[Module]:
         if self._has_full_access(current_user):
-            return self.db.query(Module).all()
+            return self.db.query(Module).order_by(Module.id).all()
         assigned_ids = [
             ma.module_id
             for ma in self.db.query(ModuleAssignment).filter(ModuleAssignment.user_id == current_user.id)
         ]
         if not assigned_ids:
             return []
-        return self.db.query(Module).filter(Module.id.in_(assigned_ids)).all()
+        return self.db.query(Module).filter(Module.id.in_(assigned_ids)).order_by(Module.id).all()
 
     def _build_module_out(self, module: Module, viewer_id: int, lessons_override: int | None = None) -> ModuleOut:
         lessons_total, lessons_completed, quiz_completed = self._module_progress(module.id, viewer_id)
@@ -447,6 +517,39 @@ class TrainingService:
             checklist_section_id=module.checklist_section_id,
             owner_id=module.owner_id,
         )
+
+    def _validate_module_checklist_link(
+        self,
+        due_to_checklist: bool,
+        checklist_section_id: int | None,
+        exclude_module_id: int | None = None,
+    ) -> None:
+        if due_to_checklist and checklist_section_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Una capacitacion obligatoria por checklist debe tener seccion vinculada",
+            )
+        if checklist_section_id is None:
+            return
+        section_exists = (
+            self.db.query(ChecklistSection)
+            .filter(ChecklistSection.id == checklist_section_id)
+            .count()
+            > 0
+        )
+        if not section_exists:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="La seccion de checklist vinculada no existe",
+            )
+        existing_link = self.db.query(Module).filter(Module.checklist_section_id == checklist_section_id)
+        if exclude_module_id is not None:
+            existing_link = existing_link.filter(Module.id != exclude_module_id)
+        if existing_link.first():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="La seccion de checklist ya esta vinculada a otro modulo",
+            )
 
     def _build_lesson_out(self, lesson: Lesson, completed: bool) -> LessonOut:
         return LessonOut(
@@ -484,11 +587,29 @@ class TrainingService:
         if not assignment:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Modulo no asignado para el usuario")
 
+    def _ensure_study_action_allowed(self, user: User) -> None:
+        role_codes = {role.code for role in user.roles}
+        management_roles = {"superadmin", "admin", "leader", "supervisor"}
+        if role_codes.intersection(management_roles):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Los roles de gestion no pueden completar lecciones ni rendir quiz",
+            )
+
     def _ensure_can_manage_module(self, module: Module, user: User) -> None:
-        if self._is_superadmin(user):
+        if self._has_manage_permission(user):
             return
-        if module.owner_id != user.id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo el dueno puede modificar el modulo")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="El usuario no puede gestionar este modulo")
+
+    def _has_manage_permission(self, user: User) -> bool:
+        return any(permission.code == "training.manage" for role in user.roles for permission in role.permissions)
+
+    def _is_assignable_learning_user(self, user: User) -> bool:
+        role_codes = {role.code for role in user.roles}
+        if role_codes.intersection({"superadmin", "admin", "leader", "supervisor"}):
+            return False
+        permission_codes = {permission.code for role in user.roles for permission in role.permissions}
+        return "training.view" in permission_codes
 
     def _get_module(self, module_id: int) -> Module:
         module = self.db.query(Module).filter(Module.id == module_id).first()
@@ -501,6 +622,27 @@ class TrainingService:
         if not lesson:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Leccion no encontrada")
         return lesson
+
+    def _ensure_quiz_enabled_for_user(self, module_id: int, current_user: User) -> Module:
+        module = self._get_module(module_id)
+        self._ensure_module_access(module_id, current_user)
+        if not module.quiz_required:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Este modulo no requiere evaluacion final",
+            )
+        lessons_total, lessons_completed, _quiz_completed = self._module_progress(module_id, current_user.id)
+        if lessons_total <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El modulo no tiene lecciones suficientes para habilitar el quiz",
+            )
+        if lessons_completed < lessons_total:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Completa todas las lecciones antes de rendir el quiz",
+            )
+        return module
 
     def _is_lesson_completed(self, lesson_id: int, user_id: int) -> bool:
         return (
@@ -543,6 +685,24 @@ class TrainingService:
         if lesson_type == "document":
             return settings.MAX_DOCUMENT_UPLOAD_MB * 1024 * 1024
         return settings.MAX_DOCUMENT_UPLOAD_MB * 1024 * 1024
+
+    def _ensure_unique_lesson_order(
+        self,
+        module_id: int,
+        display_order: int,
+        exclude_lesson_id: int | None = None,
+    ) -> None:
+        query = self.db.query(Lesson).filter(
+            Lesson.module_id == module_id,
+            Lesson.display_order == display_order,
+        )
+        if exclude_lesson_id is not None:
+            query = query.filter(Lesson.id != exclude_lesson_id)
+        if query.first():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Ya existe otra leccion con orden {display_order} en este modulo",
+            )
 
     def _validate_upload(self, upload_file, allowed_mimes: set[str], allowed_extensions: set[str], max_bytes: int) -> None:
         content_type = upload_file.content_type

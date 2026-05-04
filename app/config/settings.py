@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     SMTP_USERNAME: str | None = None
     SMTP_PASSWORD: str | None = None
     SMTP_FROM: str = "no-reply@sst.local"
+    SMTP_USE_TLS: bool = False
+    SMTP_USE_SSL: bool = False
+    SMTP_TIMEOUT_SECONDS: int = 15
     STORAGE_PROVIDER: str | None = None
     SUPABASE_PROJECT_ID: str | None = None
     SUPABASE_STORAGE_BUCKET: str | None = None
@@ -49,7 +52,7 @@ class Settings(BaseSettings):
             self.STORAGE_PROVIDER
             and self.SUPABASE_PROJECT_ID
             and self.SUPABASE_STORAGE_BUCKET
-            and self.SUPABASE_S3_ENDPOINT
+            and (self.SUPABASE_S3_DIRECT_HOST or self.SUPABASE_S3_ENDPOINT)
             and self.AWS_ACCESS_KEY_ID
             and self.AWS_SECRET_ACCESS_KEY
         )

@@ -9,6 +9,8 @@ class ChecklistSectionOut(BaseModel):
     items_total: int
     percentage: int
     status: str
+    earned_score: int = 0
+    total_weight: int = 0
     checklist_module_id: int | None = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -18,6 +20,8 @@ class ChecklistItemOut(BaseModel):
     id: int
     text: str
     status: str
+    weight: int
+    score: int
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -60,6 +60,8 @@ async def chat_socket(websocket: WebSocket):
             except (HTTPException, ValidationError) as exc:
                 detail = exc.detail if isinstance(exc, HTTPException) else "Mensaje invalido"
                 await websocket.send_json({"type": "error", "detail": detail})
+    except HTTPException:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
     except WebSocketDisconnect:
         print(f"[chat/ws] disconnect user_id={user_id}")
         if user_id is not None:

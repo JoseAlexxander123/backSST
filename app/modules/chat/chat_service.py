@@ -18,6 +18,8 @@ ROLE_CHAT_MAP = {
     "admin": {"superadmin", "leader"},
     "leader": {"admin", "collaborator"},
     "collaborator": {"leader"},
+    "supervisor": {"admin", "worker"},
+    "worker": {"supervisor"},
 }
 
 

@@ -90,3 +90,7 @@ Thumbs.db
 
 # FastAPI / Uvicorn
 __pycache__/
+
+.venv.broken-*/
+
+.venv/

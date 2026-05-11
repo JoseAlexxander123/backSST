@@ -6,6 +6,7 @@ from app.core.middleware import JWTAuthMiddleware
 from app.modules.auth.auth_router import router as auth_router
 from app.modules.chat.chat_router import router as chat_router
 from app.modules.checklist.checklist_router import router as checklist_router
+from app.modules.surveys.survey_router import router as survey_router
 from app.modules.training.training_router import router as training_router
 
 app = FastAPI(title=settings.APP_NAME)
@@ -27,6 +28,7 @@ app.include_router(auth_router)
 app.include_router(training_router)
 app.include_router(checklist_router)
 app.include_router(chat_router)
+app.include_router(survey_router)
 
 
 @app.get("/health")

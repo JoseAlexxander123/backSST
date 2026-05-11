@@ -34,6 +34,31 @@ class User(Base):
         foreign_keys="ModuleAssignment.assigned_by",
         viewonly=True,
     )
+    survey_targets = relationship(
+        "SurveyAssignment",
+        foreign_keys="SurveyAssignment.target_user_id",
+        back_populates="target_user",
+    )
+    survey_respondent_assignments = relationship(
+        "SurveyAssignment",
+        foreign_keys="SurveyAssignment.respondent_user_id",
+        back_populates="respondent_user",
+    )
+    survey_evaluator_assignments = relationship(
+        "SurveyAssignment",
+        foreign_keys="SurveyAssignment.evaluator_user_id",
+        back_populates="evaluator_user",
+    )
+    survey_responses_as_target = relationship(
+        "SurveyResponse",
+        foreign_keys="SurveyResponse.target_user_id",
+        back_populates="target_user",
+    )
+    survey_responses_as_respondent = relationship(
+        "SurveyResponse",
+        foreign_keys="SurveyResponse.respondent_user_id",
+        back_populates="respondent_user",
+    )
 
 
 class Role(Base):
@@ -164,6 +189,8 @@ class Module(Base):
     quiz_attempts = relationship("QuizAttempt", back_populates="module", cascade="all, delete-orphan")
     owner = relationship("User", foreign_keys=[owner_id])
     assignments = relationship("ModuleAssignment", back_populates="module", cascade="all, delete-orphan")
+    survey_assignments = relationship("SurveyAssignment", back_populates="module")
+    survey_responses = relationship("SurveyResponse", back_populates="module")
 
 
 class ModuleAssignment(Base):
@@ -256,3 +283,154 @@ class QuizAttempt(Base):
 
     user = relationship("User", back_populates="quiz_attempts")
     module = relationship("Module", back_populates="quiz_attempts")
+
+
+class SurveyTemplate(Base):
+    __tablename__ = "survey_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String(100), unique=True, nullable=False, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    audience_role = Column(String(50), nullable=False)
+    evaluator_role = Column(String(50), nullable=True)
+    scale_type = Column(String(50), nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    questions = relationship(
+        "SurveyQuestion",
+        back_populates="template",
+        cascade="all, delete-orphan",
+        order_by="SurveyQuestion.display_order",
+    )
+    assignments = relationship("SurveyAssignment", back_populates="template")
+    responses = relationship("SurveyResponse", back_populates="template")
+
+
+class SurveyQuestion(Base):
+    __tablename__ = "survey_questions"
+    __table_args__ = (
+        UniqueConstraint("template_id", "display_order", name="uq_survey_question_order"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    template_id = Column(Integer, ForeignKey("survey_templates.id"), nullable=False)
+    code = Column(String(100), unique=True, nullable=False, index=True)
+    question_text = Column(Text, nullable=False)
+    display_order = Column(Integer, default=1, nullable=False)
+    is_required = Column(Boolean, default=True, nullable=False)
+
+    template = relationship("SurveyTemplate", back_populates="questions")
+    answers = relationship("SurveyAnswer", back_populates="question", cascade="all, delete-orphan")
+
+
+class SurveyCampaign(Base):
+    __tablename__ = "survey_campaigns"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String(100), unique=True, nullable=False, index=True)
+    name = Column(String, nullable=False)
+    period_type = Column(String(50), nullable=False)
+    status = Column(String(50), default="draft", nullable=False)
+    start_at = Column(DateTime, nullable=True)
+    end_at = Column(DateTime, nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    assignments = relationship("SurveyAssignment", back_populates="campaign")
+    responses = relationship("SurveyResponse", back_populates="campaign")
+    creator = relationship("User", foreign_keys=[created_by])
+
+
+class SurveyAssignment(Base):
+    __tablename__ = "survey_assignments"
+    __table_args__ = (
+        UniqueConstraint(
+            "campaign_id",
+            "template_id",
+            "target_user_id",
+            "respondent_user_id",
+            "module_id",
+            name="uq_survey_assignment_scope",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    campaign_id = Column(Integer, ForeignKey("survey_campaigns.id"), nullable=False)
+    template_id = Column(Integer, ForeignKey("survey_templates.id"), nullable=False)
+    target_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    respondent_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    evaluator_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    module_id = Column(Integer, ForeignKey("modules.id"), nullable=True)
+    status = Column(String(50), default="pending", nullable=False)
+    assigned_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    due_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    campaign = relationship("SurveyCampaign", back_populates="assignments")
+    template = relationship("SurveyTemplate", back_populates="assignments")
+    target_user = relationship("User", foreign_keys=[target_user_id], back_populates="survey_targets")
+    respondent_user = relationship(
+        "User",
+        foreign_keys=[respondent_user_id],
+        back_populates="survey_respondent_assignments",
+    )
+    evaluator_user = relationship(
+        "User",
+        foreign_keys=[evaluator_user_id],
+        back_populates="survey_evaluator_assignments",
+    )
+    module = relationship("Module", back_populates="survey_assignments")
+    response = relationship(
+        "SurveyResponse",
+        back_populates="assignment",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+
+
+class SurveyResponse(Base):
+    __tablename__ = "survey_responses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    assignment_id = Column(Integer, ForeignKey("survey_assignments.id"), nullable=False, unique=True)
+    campaign_id = Column(Integer, ForeignKey("survey_campaigns.id"), nullable=False)
+    template_id = Column(Integer, ForeignKey("survey_templates.id"), nullable=False)
+    target_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    respondent_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    module_id = Column(Integer, ForeignKey("modules.id"), nullable=True)
+    started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    submitted_at = Column(DateTime, nullable=True)
+    is_submitted = Column(Boolean, default=False, nullable=False)
+
+    assignment = relationship("SurveyAssignment", back_populates="response")
+    campaign = relationship("SurveyCampaign", back_populates="responses")
+    template = relationship("SurveyTemplate", back_populates="responses")
+    target_user = relationship("User", foreign_keys=[target_user_id], back_populates="survey_responses_as_target")
+    respondent_user = relationship(
+        "User",
+        foreign_keys=[respondent_user_id],
+        back_populates="survey_responses_as_respondent",
+    )
+    module = relationship("Module", back_populates="survey_responses")
+    answers = relationship(
+        "SurveyAnswer",
+        back_populates="response",
+        cascade="all, delete-orphan",
+        order_by="SurveyAnswer.id",
+    )
+
+
+class SurveyAnswer(Base):
+    __tablename__ = "survey_answers"
+    __table_args__ = (UniqueConstraint("response_id", "question_id", name="uq_survey_answer_question"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    response_id = Column(Integer, ForeignKey("survey_responses.id"), nullable=False)
+    question_id = Column(Integer, ForeignKey("survey_questions.id"), nullable=False)
+    numeric_value = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    response = relationship("SurveyResponse", back_populates="answers")
+    question = relationship("SurveyQuestion", back_populates="answers")

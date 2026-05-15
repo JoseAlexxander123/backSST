@@ -40,6 +40,12 @@ Usa estos comandos en un servicio Python tipo Render:
 
 Antes de publicar, configura `SECRET_KEY`, `DATABASE_URL` y `FRONTEND_URLS` en el proveedor.
 
+## Repo de despliegue
+
+El backend puede publicarse desde este repositorio:
+
+- `https://github.com/JoseAlexxander123/sstbackend.git`
+
 ## Render / UAT
 
 El repo ya incluye `render.yaml` y `.python-version`.
@@ -47,7 +53,7 @@ El repo ya incluye `render.yaml` y `.python-version`.
 Con eso puedes desplegarlo como Blueprint:
 
 1. En Render, entra a `New > Blueprint`.
-2. Conecta `https://github.com/Iginio99/sst_backend`.
+2. Conecta `https://github.com/JoseAlexxander123/sstbackend`.
 3. Render detectara `render.yaml` y creara un Web Service `sst-backend-uat`.
 4. Durante la creacion, pega tu `DATABASE_URL` de UAT en el campo solicitado.
 

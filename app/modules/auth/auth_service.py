@@ -223,6 +223,8 @@ class AuthService:
             "roles": profile.roles,
             "permissions": profile.permissions,
             "name": user.name,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
         }
         access_token = create_access_token(access_payload, settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         refresh_raw, refresh_exp = create_refresh_token(user.id, settings.REFRESH_TOKEN_EXPIRE_DAYS)
@@ -255,6 +257,8 @@ class AuthService:
             id=user.id,
             email=user.email,
             name=user.name,
+            first_name=user.first_name,
+            last_name=user.last_name,
             roles=roles,
             permissions=sorted(list(permissions)),
         )

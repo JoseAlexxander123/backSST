@@ -75,6 +75,8 @@ class UserOut(BaseModel):
     id: int
     email: str
     name: str
+    first_name: str
+    last_name: str
     roles: List[str]
     permissions: List[str]
 

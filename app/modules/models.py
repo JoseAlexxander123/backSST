@@ -10,7 +10,8 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, nullable=False, index=True)
-    name = Column(String, nullable=False)
+    first_name = Column(String, nullable=False)
+    last_name = Column(String, nullable=False, default="")
     hashed_password = Column(String, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     two_factor_enabled = Column(Boolean, default=True, nullable=False)
@@ -191,6 +192,15 @@ class Module(Base):
     assignments = relationship("ModuleAssignment", back_populates="module", cascade="all, delete-orphan")
     survey_assignments = relationship("SurveyAssignment", back_populates="module")
     survey_responses = relationship("SurveyResponse", back_populates="module")
+
+    @property
+    def name(self) -> str:
+        return self.full_name
+
+    @property
+    def full_name(self) -> str:
+        parts = [self.first_name.strip(), self.last_name.strip()]
+        return " ".join(part for part in parts if part).strip()
 
 
 class ModuleAssignment(Base):

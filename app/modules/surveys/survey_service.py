@@ -50,7 +50,24 @@ PERFORMANCE_SCALE = [
     SurveyScaleOptionOut(numeric_value=5, label="Cumple con excelencia"),
 ]
 
+COMPLIANCE_SCALE = [
+    SurveyScaleOptionOut(numeric_value=1, label="No cumple"),
+    SurveyScaleOptionOut(numeric_value=2, label="Si cumple"),
+]
+
 EXPORT_QUESTION_CODES = [
+    "v0_i1",
+    "v0_i2",
+    "v0_i3",
+    "v0_i4",
+    "v0_i5",
+    "v0_i6",
+    "v0_i7",
+    "v0_i8",
+    "v0_i9",
+    "v0_i10",
+    "v0_i11",
+    "v0_i12",
     "v1_i1",
     "v1_i2",
     "v1_i3",
@@ -69,6 +86,8 @@ EXPORT_QUESTION_CODES = [
     "v4_i4",
 ]
 
+POST_TEST_PERIOD = "post_test"
+
 
 class SurveyService:
     def __init__(self, db: Session):
@@ -77,6 +96,7 @@ class SurveyService:
     def list_my_assignments(self, current_user: User, include_completed: bool = True) -> list[SurveyAssignmentSummaryOut]:
         query = (
             self.db.query(SurveyAssignment)
+            .join(SurveyAssignment.campaign)
             .options(
                 joinedload(SurveyAssignment.campaign),
                 joinedload(SurveyAssignment.template),
@@ -85,6 +105,7 @@ class SurveyService:
                 joinedload(SurveyAssignment.module),
             )
             .filter(SurveyAssignment.respondent_user_id == current_user.id)
+            .filter(SurveyCampaign.period_type == POST_TEST_PERIOD)
             .order_by(SurveyAssignment.completed_at.is_(None).desc(), SurveyAssignment.assigned_at.asc())
         )
         if not include_completed:
@@ -226,6 +247,7 @@ class SurveyService:
                 "completed": 0,
             }
             for campaign in self.db.query(SurveyCampaign).order_by(SurveyCampaign.id.asc()).all()
+            if campaign.period_type == POST_TEST_PERIOD
         }
         for assignment in assignments:
             bucket = campaign_map[assignment.campaign.code]
@@ -264,6 +286,11 @@ class SurveyService:
         campaign = self.db.query(SurveyCampaign).filter(SurveyCampaign.id == campaign_id).first()
         if not campaign:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campana no encontrada")
+        if campaign.period_type != POST_TEST_PERIOD:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Solo se pueden activar campanas de post test",
+            )
 
         generated_assignments = self._generate_assignments_for_campaign(campaign.id)
         now = datetime.utcnow()
@@ -309,13 +336,11 @@ class SurveyService:
     def export_xlsx(self, current_user: User) -> tuple[bytes, str]:
         self._ensure_export_permission(current_user)
         workbook = Workbook()
-        pre_sheet = workbook.active
-        pre_sheet.title = "pre_test"
-        post_sheet = workbook.create_sheet("post_test")
+        post_sheet = workbook.active
+        post_sheet.title = POST_TEST_PERIOD
 
-        pre_rows, post_rows = self._build_consolidated_export_rows()
+        post_rows = self._build_consolidated_export_rows()
         headers = ["No", "colaborador", "email", "leader", "module", *EXPORT_QUESTION_CODES]
-        self._write_export_sheet(pre_sheet, headers, pre_rows)
         self._write_export_sheet(post_sheet, headers, post_rows)
 
         output = BytesIO()
@@ -325,22 +350,21 @@ class SurveyService:
 
     def export_csv(self, current_user: User) -> tuple[bytes, str]:
         self._ensure_export_permission(current_user)
-        pre_rows, post_rows = self._build_consolidated_export_rows()
+        post_rows = self._build_consolidated_export_rows()
         output = StringIO()
         writer = csv.writer(output)
-        headers = ["period_type", "No", "colaborador", "email", "leader", "module", *EXPORT_QUESTION_CODES]
+        headers = ["No", "colaborador", "email", "leader", "module", *EXPORT_QUESTION_CODES]
         writer.writerow(headers)
-        for period_type, rows in (("pre_test", pre_rows), ("post_test", post_rows)):
-            for row in rows:
-                writer.writerow([period_type, *row])
+        for row in post_rows:
+            writer.writerow(row)
         filename = f"survey_export_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
         return output.getvalue().encode("utf-8"), filename
 
-    def _build_consolidated_export_rows(self) -> tuple[list[list[object]], list[list[object]]]:
+    def _build_consolidated_export_rows(self) -> list[list[object]]:
         responses = self._base_response_query().all()
-        grouped: dict[tuple[str, int], dict[str, object]] = {}
+        grouped: dict[int, dict[str, object]] = {}
         for response in responses:
-            key = (response.campaign.period_type, response.target_user_id)
+            key = response.target_user_id
             row = grouped.setdefault(
                 key,
                 {
@@ -358,24 +382,20 @@ class SurveyService:
             for answer in response.answers:
                 row["answers"][answer.question.code] = answer.numeric_value
 
-        def build_rows(period_type: str) -> list[list[object]]:
-            selected = [item for key, item in grouped.items() if key[0] == period_type]
-            rows: list[list[object]] = []
-            for index, item in enumerate(sorted(selected, key=lambda record: str(record["email"])), start=1):
-                row = [
-                    index,
-                    item["colaborador"],
-                    item["email"],
-                    item["leader"],
-                    item["module"],
-                ]
-                answers = item["answers"]
-                for code in EXPORT_QUESTION_CODES:
-                    row.append(answers.get(code, ""))
-                rows.append(row)
-            return rows
-
-        return build_rows("pre_test"), build_rows("post_test")
+        rows: list[list[object]] = []
+        for index, item in enumerate(sorted(grouped.values(), key=lambda record: str(record["email"])), start=1):
+            row = [
+                index,
+                item["colaborador"],
+                item["email"],
+                item["leader"],
+                item["module"],
+            ]
+            answers = item["answers"]
+            for code in EXPORT_QUESTION_CODES:
+                row.append(answers.get(code, ""))
+            rows.append(row)
+        return rows
 
     def _write_export_sheet(self, sheet, headers: list[str], rows: Iterable[list[object]]) -> None:
         sheet.append(headers)
@@ -383,18 +403,32 @@ class SurveyService:
             sheet.append(row)
 
     def _base_assignment_query(self):
-        return self.db.query(SurveyAssignment).options(
-            joinedload(SurveyAssignment.campaign),
-            joinedload(SurveyAssignment.template),
-            joinedload(SurveyAssignment.target_user),
-            joinedload(SurveyAssignment.respondent_user),
-            joinedload(SurveyAssignment.module),
+        return (
+            self.db.query(SurveyAssignment)
+            .join(SurveyAssignment.campaign)
+            .options(
+                joinedload(SurveyAssignment.campaign),
+                joinedload(SurveyAssignment.template),
+                joinedload(SurveyAssignment.target_user),
+                joinedload(SurveyAssignment.respondent_user),
+                joinedload(SurveyAssignment.module),
+            )
+            .filter(SurveyCampaign.period_type == POST_TEST_PERIOD)
         )
 
     def _generate_assignments_for_campaign(self, campaign_id: int) -> int:
         collaborator_templates = (
             self.db.query(SurveyTemplate)
-            .filter(SurveyTemplate.code.in_(["sst_awareness", "bidirectional_communication", "usability"]))
+            .filter(
+                SurveyTemplate.code.in_(
+                    [
+                        "functionality_checklist",
+                        "sst_awareness",
+                        "bidirectional_communication",
+                        "usability",
+                    ]
+                )
+            )
             .all()
         )
         task_verification_template = (
@@ -491,18 +525,25 @@ class SurveyService:
         return True
 
     def _base_response_query(self):
-        return self.db.query(SurveyResponse).options(
-            joinedload(SurveyResponse.campaign),
-            joinedload(SurveyResponse.template),
-            joinedload(SurveyResponse.target_user),
-            joinedload(SurveyResponse.respondent_user),
-            joinedload(SurveyResponse.module),
-            joinedload(SurveyResponse.answers).joinedload(SurveyAnswer.question),
-        ).filter(SurveyResponse.is_submitted.is_(True))
+        return (
+            self.db.query(SurveyResponse)
+            .join(SurveyResponse.campaign)
+            .options(
+                joinedload(SurveyResponse.campaign),
+                joinedload(SurveyResponse.template),
+                joinedload(SurveyResponse.target_user),
+                joinedload(SurveyResponse.respondent_user),
+                joinedload(SurveyResponse.module),
+                joinedload(SurveyResponse.answers).joinedload(SurveyAnswer.question),
+            )
+            .filter(SurveyResponse.is_submitted.is_(True))
+            .filter(SurveyCampaign.period_type == POST_TEST_PERIOD)
+        )
 
     def _get_assignment(self, assignment_id: int) -> SurveyAssignment:
         assignment = (
             self.db.query(SurveyAssignment)
+            .join(SurveyAssignment.campaign)
             .options(
                 joinedload(SurveyAssignment.campaign),
                 joinedload(SurveyAssignment.template).joinedload(SurveyTemplate.questions),
@@ -513,6 +554,7 @@ class SurveyService:
                 joinedload(SurveyAssignment.response).joinedload(SurveyResponse.answers),
             )
             .filter(SurveyAssignment.id == assignment_id)
+            .filter(SurveyCampaign.period_type == POST_TEST_PERIOD)
             .first()
         )
         if not assignment:
@@ -538,6 +580,8 @@ class SurveyService:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No puedes exportar encuestas")
 
     def _scale_options_for_template(self, template: SurveyTemplate) -> list[SurveyScaleOptionOut]:
+        if template.scale_type == "compliance_1_2":
+            return COMPLIANCE_SCALE
         if template.scale_type == "performance_1_5":
             return PERFORMANCE_SCALE
         return AGREEMENT_SCALE

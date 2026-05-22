@@ -100,6 +100,8 @@ class ChatService:
                 id=user.id,
                 email=user.email,
                 name=user.name,
+                first_name=user.first_name,
+                last_name=user.last_name,
                 roles=[role.code for role in user.roles],
             )
             for user in users

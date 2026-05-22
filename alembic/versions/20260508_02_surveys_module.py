@@ -179,8 +179,7 @@ def upgrade() -> None:
         """
         INSERT INTO survey_campaigns (id, code, name, period_type, status, created_by)
         VALUES
-          (1, 'pre_test_2026', 'Pre test 2026', 'pre_test', 'active', 1),
-          (2, 'post_test_2026', 'Post test 2026', 'post_test', 'draft', 1)
+          (1, 'post_test_2026', 'Post test 2026', 'post_test', 'active', 1)
         ON CONFLICT (id) DO NOTHING;
         """
     )

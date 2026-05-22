@@ -49,7 +49,15 @@ class TrainingService:
     # -------------------------
     def list_modules(self, current_user: User) -> List[ModuleOut]:
         modules = self._modules_for_user(current_user)
-        return [self._build_module_out(module, current_user.id) for module in modules]
+        assigned_module_ids = self._assigned_module_ids_for_user(current_user.id)
+        return [
+            self._build_module_out(
+                module,
+                current_user.id,
+                assigned_to_viewer=module.id in assigned_module_ids,
+            )
+            for module in modules
+        ]
 
     def list_checklist_sections(self) -> List[ChecklistSectionOptionOut]:
         sections = self.db.query(ChecklistSection).order_by(ChecklistSection.id).all()
@@ -83,7 +91,12 @@ class TrainingService:
             )
         }
 
-        module_info = self._build_module_out(module, current_user.id, lessons_override=len(lessons))
+        module_info = self._build_module_out(
+            module,
+            current_user.id,
+            lessons_override=len(lessons),
+            assigned_to_viewer=self._is_module_assigned_to_user(module.id, current_user.id),
+        )
 
         lesson_list = [
             self._build_lesson_out(lesson, lesson.id in completed_lesson_ids)
@@ -412,6 +425,8 @@ class TrainingService:
             UserSummary(
                 id=user.id,
                 name=user.name,
+                first_name=user.first_name,
+                last_name=user.last_name,
                 email=user.email,
                 roles=[r.code for r in user.roles],
             )
@@ -440,6 +455,8 @@ class TrainingService:
                     user=UserSummary(
                         id=assignment.user.id,
                         name=assignment.user.name,
+                        first_name=assignment.user.first_name,
+                        last_name=assignment.user.last_name,
                         email=assignment.user.email,
                         roles=[r.code for r in assignment.user.roles],
                     ),
@@ -486,17 +503,34 @@ class TrainingService:
         )
 
     def _modules_for_user(self, current_user: User) -> List[Module]:
-        if self._has_full_access(current_user):
-            return self.db.query(Module).order_by(Module.id).all()
-        assigned_ids = [
-            ma.module_id
-            for ma in self.db.query(ModuleAssignment).filter(ModuleAssignment.user_id == current_user.id)
-        ]
-        if not assigned_ids:
+        if not self._can_view_training(current_user):
             return []
-        return self.db.query(Module).filter(Module.id.in_(assigned_ids)).order_by(Module.id).all()
+        return self.db.query(Module).order_by(Module.id).all()
 
-    def _build_module_out(self, module: Module, viewer_id: int, lessons_override: int | None = None) -> ModuleOut:
+    def _assigned_module_ids_for_user(self, user_id: int) -> set[int]:
+        return {
+            ma.module_id
+            for ma in self.db.query(ModuleAssignment).filter(ModuleAssignment.user_id == user_id)
+        }
+
+    def _is_module_assigned_to_user(self, module_id: int, user_id: int) -> bool:
+        return (
+            self.db.query(ModuleAssignment)
+            .filter(
+                ModuleAssignment.module_id == module_id,
+                ModuleAssignment.user_id == user_id,
+            )
+            .first()
+            is not None
+        )
+
+    def _build_module_out(
+        self,
+        module: Module,
+        viewer_id: int,
+        lessons_override: int | None = None,
+        assigned_to_viewer: bool = False,
+    ) -> ModuleOut:
         lessons_total, lessons_completed, quiz_completed = self._module_progress(module.id, viewer_id)
         if lessons_override is not None:
             lessons_total = lessons_override
@@ -516,6 +550,7 @@ class TrainingService:
             quiz_required=module.quiz_required,
             checklist_section_id=module.checklist_section_id,
             owner_id=module.owner_id,
+            assigned_to_viewer=assigned_to_viewer,
         )
 
     def _validate_module_checklist_link(
@@ -573,19 +608,20 @@ class TrainingService:
         role_codes = {r.code for r in user.roles}
         return "superadmin" in role_codes or "leader" in role_codes or "admin" in role_codes
 
+    def _can_view_training(self, user: User) -> bool:
+        return any(
+            permission.code == "training.view"
+            for role in user.roles
+            for permission in role.permissions
+        )
+
     def _is_superadmin(self, user: User) -> bool:
         return any(r.code == "superadmin" for r in user.roles)
 
     def _ensure_module_access(self, module_id: int, user: User) -> None:
-        if self._has_full_access(user):
+        if self._has_full_access(user) or self._can_view_training(user):
             return
-        assignment = (
-            self.db.query(ModuleAssignment)
-            .filter(ModuleAssignment.module_id == module_id, ModuleAssignment.user_id == user.id)
-            .first()
-        )
-        if not assignment:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Modulo no asignado para el usuario")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Modulo no disponible para el usuario")
 
     def _ensure_study_action_allowed(self, user: User) -> None:
         role_codes = {role.code for role in user.roles}

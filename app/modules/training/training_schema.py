@@ -17,6 +17,7 @@ class ModuleOut(BaseModel):
     quiz_required: bool = True
     checklist_section_id: Optional[int] = None
     owner_id: Optional[int] = None
+    assigned_to_viewer: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -230,6 +231,8 @@ class ModuleAssignmentRequest(BaseModel):
 class UserSummary(BaseModel):
     id: int
     name: str
+    first_name: str
+    last_name: str
     email: str
     roles: List[str]
 

@@ -128,5 +128,4 @@ class SurveyCampaignActivationOut(BaseModel):
 
 class SurveyExportResultOut(BaseModel):
     filename: str
-    rows_pre_test: int
     rows_post_test: int

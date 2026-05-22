@@ -380,7 +380,10 @@ class SurveyService:
             if response.template.code == "task_verification":
                 row["leader"] = response.respondent_user.name
             for answer in response.answers:
-                row["answers"][answer.question.code] = answer.numeric_value
+                row["answers"][answer.question.code] = self._answer_label_for_template(
+                    response.template,
+                    answer.numeric_value,
+                )
 
         rows: list[list[object]] = []
         for index, item in enumerate(sorted(grouped.values(), key=lambda record: str(record["email"])), start=1):
@@ -585,6 +588,12 @@ class SurveyService:
         if template.scale_type == "performance_1_5":
             return PERFORMANCE_SCALE
         return AGREEMENT_SCALE
+
+    def _answer_label_for_template(self, template: SurveyTemplate, numeric_value: int) -> str:
+        for option in self._scale_options_for_template(template):
+            if option.numeric_value == numeric_value:
+                return option.label
+        return str(numeric_value)
 
     def _build_assignment_summary(self, assignment: SurveyAssignment) -> SurveyAssignmentSummaryOut:
         pending_kind = "respond"

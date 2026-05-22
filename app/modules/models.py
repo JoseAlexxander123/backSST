@@ -61,6 +61,15 @@ class User(Base):
         back_populates="respondent_user",
     )
 
+    @property
+    def name(self) -> str:
+        return self.full_name
+
+    @property
+    def full_name(self) -> str:
+        parts = [self.first_name.strip(), self.last_name.strip()]
+        return " ".join(part for part in parts if part).strip()
+
 
 class Role(Base):
     __tablename__ = "roles"
@@ -192,15 +201,6 @@ class Module(Base):
     assignments = relationship("ModuleAssignment", back_populates="module", cascade="all, delete-orphan")
     survey_assignments = relationship("SurveyAssignment", back_populates="module")
     survey_responses = relationship("SurveyResponse", back_populates="module")
-
-    @property
-    def name(self) -> str:
-        return self.full_name
-
-    @property
-    def full_name(self) -> str:
-        parts = [self.first_name.strip(), self.last_name.strip()]
-        return " ".join(part for part in parts if part).strip()
 
 
 class ModuleAssignment(Base):

@@ -12,6 +12,7 @@ from app.modules.surveys.survey_schema import (
     SurveyAssignmentSummaryOut,
     SurveySubmissionResult,
     SurveySubmitRequest,
+    SurveyTemplateDefinitionOut,
 )
 from app.modules.surveys.survey_service import SurveyService
 
@@ -70,6 +71,14 @@ def admin_responses(
     current_user=Depends(get_current_user),
 ):
     return SurveyService(db).admin_responses(current_user, limit=limit)
+
+
+@router.get("/admin/templates", response_model=list[SurveyTemplateDefinitionOut])
+def admin_templates(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    return SurveyService(db).admin_templates(current_user)
 
 
 @router.get("/admin/export.xlsx")

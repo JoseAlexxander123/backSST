@@ -30,6 +30,7 @@ from app.modules.surveys.survey_schema import (
     SurveyScaleOptionOut,
     SurveySubmissionResult,
     SurveySubmitRequest,
+    SurveyTemplateDefinitionOut,
     SurveyTemplateSummaryOut,
 )
 
@@ -332,6 +333,36 @@ class SurveyService:
                 )
             )
         return rows
+
+    def admin_templates(self, current_user: User) -> list[SurveyTemplateDefinitionOut]:
+        self._ensure_manage_permission(current_user)
+        templates = (
+            self.db.query(SurveyTemplate)
+            .options(joinedload(SurveyTemplate.questions))
+            .filter(SurveyTemplate.is_active.is_(True))
+            .order_by(SurveyTemplate.id.asc())
+            .all()
+        )
+        return [
+            SurveyTemplateDefinitionOut(
+                template_id=template.id,
+                template_code=template.code,
+                template_name=template.name,
+                description=template.description,
+                audience_role=template.audience_role,
+                evaluator_role=template.evaluator_role,
+                scale_type=template.scale_type,
+                scale_options=self._scale_options_for_template(template),
+                questions=[
+                    SurveyQuestionOut.model_validate(question)
+                    for question in sorted(
+                        template.questions,
+                        key=lambda item: item.display_order,
+                    )
+                ],
+            )
+            for template in templates
+        ]
 
     def export_xlsx(self, current_user: User) -> tuple[bytes, str]:
         self._ensure_export_permission(current_user)

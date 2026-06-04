@@ -83,6 +83,18 @@ class SurveyTemplateSummaryOut(BaseModel):
     average_score: Optional[float] = None
 
 
+class SurveyTemplateDefinitionOut(BaseModel):
+    template_id: int
+    template_code: str
+    template_name: str
+    description: Optional[str] = None
+    audience_role: str
+    evaluator_role: Optional[str] = None
+    scale_type: str
+    scale_options: List[SurveyScaleOptionOut]
+    questions: List[SurveyQuestionOut]
+
+
 class SurveyCampaignSummaryOut(BaseModel):
     campaign_id: int
     campaign_code: str

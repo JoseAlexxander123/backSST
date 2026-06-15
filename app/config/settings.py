@@ -26,11 +26,11 @@ class Settings(BaseSettings):
     SMTP_USE_TLS: bool = False
     SMTP_USE_SSL: bool = False
     SMTP_TIMEOUT_SECONDS: int = 15
-    STORAGE_PROVIDER: str | None = None
-    SUPABASE_PROJECT_ID: str | None = None
-    SUPABASE_STORAGE_BUCKET: str | None = None
-    SUPABASE_S3_ENDPOINT: str | None = None
-    SUPABASE_S3_DIRECT_HOST: str | None = None
+    STORAGE_PROVIDER: str | None = "supabase_s3"
+    SUPABASE_PROJECT_ID: str | None = "ugvbjpnaehuxptvuwsvl"
+    SUPABASE_STORAGE_BUCKET: str | None = "sst-storage"
+    SUPABASE_S3_ENDPOINT: str | None = "https://ugvbjpnaehuxptvuwsvl.supabase.co/storage/v1/s3"
+    SUPABASE_S3_DIRECT_HOST: str | None = "https://ugvbjpnaehuxptvuwsvl.storage.supabase.co/storage/v1/s3"
     AWS_ACCESS_KEY_ID: str | None = None
     AWS_SECRET_ACCESS_KEY: str | None = None
     MAX_IMAGE_UPLOAD_MB: int = 5

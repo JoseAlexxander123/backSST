@@ -16,6 +16,10 @@ from app.modules.auth.auth_schema import (
     RoleCreateRequest,
     RoleOut,
     RoleUpdateRequest,
+    UserAdminOut,
+    UserCreateRequest,
+    UserPasswordResetRequest,
+    UserPasswordResetResult,
     UserOut,
 )
 from app.modules.auth.auth_service import AuthService, get_current_user, require_permissions
@@ -89,6 +93,46 @@ def assign_role_permissions(role_id: int, payload: AssignPermissionsRequest, db:
 )
 def list_permissions(db: Session = Depends(get_db)):
     return AuthService(db).list_permissions()
+
+
+@router.get(
+    "/users",
+    response_model=List[UserAdminOut],
+    dependencies=[Depends(require_permissions(["users.manage"]))],
+)
+def list_users(db: Session = Depends(get_db)):
+    service = AuthService(db)
+    return [service._serialize_user_admin(user) for user in service.list_users()]
+
+
+@router.post(
+    "/users",
+    response_model=UserAdminOut,
+    dependencies=[Depends(require_permissions(["users.manage"]))],
+)
+def create_user(
+    payload: UserCreateRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    service = AuthService(db)
+    user = service.create_user(payload, current_user)
+    return service._serialize_user_admin(user)
+
+
+@router.post(
+    "/users/{user_id}/reset-password",
+    response_model=UserPasswordResetResult,
+    dependencies=[Depends(require_permissions(["users.manage"]))],
+)
+def reset_user_password(
+    user_id: int,
+    payload: UserPasswordResetRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    service = AuthService(db)
+    return service.reset_user_password(user_id, payload, current_user)
 
 
 @router.post(

@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel, Field, ConfigDict
 
@@ -79,6 +80,40 @@ class UserOut(BaseModel):
     last_name: str
     roles: List[str]
     permissions: List[str]
+
+
+class UserAdminOut(UserOut):
+    is_active: bool
+    two_factor_enabled: bool
+    created_at: datetime
+    last_login_at: Optional[datetime] = None
+    module_assignments_count: int = 0
+    lesson_assignments_count: int = 0
+    survey_assignments_count: int = 0
+    pending_survey_assignments_count: int = 0
+
+
+class UserCreateRequest(BaseModel):
+    email: str
+    first_name: str
+    last_name: str
+    password: str
+    role_codes: List[str]
+    is_active: bool = True
+    two_factor_enabled: bool = True
+
+
+class UserPasswordResetRequest(BaseModel):
+    new_password: str
+    notify_user: bool = False
+
+
+class UserPasswordResetResult(BaseModel):
+    user_id: int
+    email: str
+    sessions_revoked: int
+    otp_codes_revoked: int
+    notified_by_email: bool
 
 
 class AuthResponse(BaseModel):

@@ -25,9 +25,26 @@ from app.modules.auth.auth_schema import (
     RoleCreateRequest,
     RoleUpdateRequest,
     TokenResponse,
+    UserAdminOut,
+    UserCreateRequest,
+    UserPasswordResetRequest,
+    UserPasswordResetResult,
     UserOut,
 )
-from app.modules.models import Permission, RefreshToken, Role, TwoFactorCode, User
+from app.modules.models import (
+    Lesson,
+    Module,
+    ModuleAssignment,
+    Permission,
+    RefreshToken,
+    Role,
+    SurveyAssignment,
+    SurveyCampaign,
+    SurveyTemplate,
+    TwoFactorCode,
+    User,
+    UserLessonProgress,
+)
 from app.shared.email import send_email
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -132,6 +149,119 @@ class AuthService:
 
     def list_permissions(self) -> List[Permission]:
         return self.db.query(Permission).all()
+
+    def list_users(self) -> List[User]:
+        return (
+            self.db.query(User)
+            .options(
+                joinedload(User.roles).joinedload(Role.permissions),
+                joinedload(User.module_assignments),
+                joinedload(User.lesson_progress),
+                joinedload(User.survey_targets),
+                joinedload(User.survey_respondent_assignments),
+                joinedload(User.survey_evaluator_assignments),
+            )
+            .order_by(User.created_at.desc(), User.id.desc())
+            .all()
+        )
+
+    def create_user(self, payload: UserCreateRequest, current_user: User) -> User:
+        validate_password_policy(payload.password)
+        email = payload.email.strip().lower()
+        if not email:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El correo es obligatorio")
+        if self.db.query(User).filter(User.email == email).first():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ya existe un usuario con ese correo")
+
+        role_codes = sorted({code.strip() for code in payload.role_codes if code.strip()})
+        if not role_codes:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Debes seleccionar al menos un rol")
+        self._validate_role_combination(role_codes)
+
+        roles = self.db.query(Role).filter(Role.code.in_(role_codes)).all()
+        found_codes = {role.code for role in roles}
+        missing_codes = sorted(set(role_codes) - found_codes)
+        if missing_codes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Roles no encontrados: {', '.join(missing_codes)}",
+            )
+
+        first_name = payload.first_name.strip()
+        last_name = payload.last_name.strip()
+        if not first_name:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El nombre es obligatorio")
+        if not last_name:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El apellido es obligatorio")
+
+        user = User(
+            email=email,
+            first_name=first_name,
+            last_name=last_name,
+            hashed_password=hash_password(payload.password),
+            is_active=payload.is_active,
+            two_factor_enabled=payload.two_factor_enabled,
+        )
+        user.roles = roles
+        self.db.add(user)
+        self.db.flush()
+
+        if self._is_collaborator_role_set(role_codes):
+            self._provision_collaborator(user, current_user)
+
+        self.db.commit()
+        return self._get_user_with_admin_relations(user.id)
+
+    def reset_user_password(
+        self,
+        user_id: int,
+        payload: UserPasswordResetRequest,
+        current_user: User,
+    ) -> UserPasswordResetResult:
+        validate_password_policy(payload.new_password)
+        user = self.db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
+
+        user.hashed_password = hash_password(payload.new_password)
+        sessions_revoked = (
+            self.db.query(RefreshToken)
+            .filter(RefreshToken.user_id == user.id, RefreshToken.revoked.is_(False))
+            .update({"revoked": True}, synchronize_session=False)
+        )
+        otp_codes_revoked = (
+            self.db.query(TwoFactorCode)
+            .filter(TwoFactorCode.user_id == user.id, TwoFactorCode.consumed_at.is_(None))
+            .delete(synchronize_session=False)
+        )
+
+        if payload.notify_user:
+            try:
+                send_email(
+                    recipient=user.email,
+                    subject="Recuperacion de contrasena SST",
+                    body=(
+                        f"Hola {user.name or user.email},\n\n"
+                        "Un superadministrador ha restablecido tu acceso al sistema SST.\n"
+                        f"Tu nueva contrasena temporal es: {payload.new_password}\n\n"
+                        "Por seguridad, ingresa nuevamente al sistema con esta clave."
+                    ),
+                )
+            except Exception as exc:  # pragma: no cover - SMTP depende de entorno
+                self.db.rollback()
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"No se pudo enviar el correo de recuperacion: {exc}",
+                )
+
+        self.db.commit()
+        return UserPasswordResetResult(
+            user_id=user.id,
+            email=user.email,
+            sessions_revoked=sessions_revoked,
+            otp_codes_revoked=otp_codes_revoked,
+            notified_by_email=payload.notify_user,
+        )
 
     def create_role(self, payload: RoleCreateRequest) -> Role:
         role = Role(name=payload.name, code=payload.code, description=payload.description)
@@ -263,6 +393,43 @@ class AuthService:
             permissions=sorted(list(permissions)),
         )
 
+    def _serialize_user_admin(self, user: User) -> UserAdminOut:
+        profile = self._serialize_user(user)
+        survey_ids = {
+            assignment.id
+            for assignment in [
+                *user.survey_targets,
+                *user.survey_respondent_assignments,
+                *user.survey_evaluator_assignments,
+            ]
+        }
+        pending_survey_ids = {
+            assignment.id
+            for assignment in [
+                *user.survey_targets,
+                *user.survey_respondent_assignments,
+                *user.survey_evaluator_assignments,
+            ]
+            if assignment.status != "completed"
+        }
+        return UserAdminOut(
+            id=profile.id,
+            email=profile.email,
+            name=profile.name,
+            first_name=profile.first_name,
+            last_name=profile.last_name,
+            roles=profile.roles,
+            permissions=profile.permissions,
+            is_active=user.is_active,
+            two_factor_enabled=user.two_factor_enabled,
+            created_at=user.created_at,
+            last_login_at=user.last_login_at,
+            module_assignments_count=len(user.module_assignments),
+            lesson_assignments_count=len(user.lesson_progress),
+            survey_assignments_count=len(survey_ids),
+            pending_survey_assignments_count=len(pending_survey_ids),
+        )
+
     def _mask_email(self, email: str) -> str:
         name, _, domain = email.partition("@")
         if len(name) <= 2:
@@ -275,6 +442,193 @@ class AuthService:
         self.db.commit()
         self.db.refresh(role)
 
+    def _validate_role_combination(self, role_codes: list[str]) -> None:
+        management_roles = {"superadmin", "admin", "leader", "supervisor"}
+        role_set = set(role_codes)
+        if "collaborator" in role_set and role_set.intersection(management_roles):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No se puede mezclar collaborator con roles de gestion en el registro inicial",
+            )
+
+    def _is_collaborator_role_set(self, role_codes: list[str]) -> bool:
+        return "collaborator" in set(role_codes)
+
+    def _provision_collaborator(self, user: User, current_user: User) -> None:
+        modules = (
+            self.db.query(Module)
+            .options(joinedload(Module.owner).joinedload(User.roles))
+            .order_by(Module.id.asc())
+            .all()
+        )
+        for module in modules:
+            assigner_id = self._resolve_assigner_for_module(module, current_user)
+            existing_assignment = (
+                self.db.query(ModuleAssignment)
+                .filter(ModuleAssignment.user_id == user.id, ModuleAssignment.module_id == module.id)
+                .first()
+            )
+            if existing_assignment is None:
+                self.db.add(
+                    ModuleAssignment(
+                        module_id=module.id,
+                        user_id=user.id,
+                        assigned_by=assigner_id,
+                    )
+                )
+
+        self.db.flush()
+        self._ensure_lesson_progress_rows(user.id)
+        self._ensure_collaborator_survey_assignments(user.id, created_by=current_user.id)
+
+    def _resolve_assigner_for_module(self, module: Module, current_user: User) -> int:
+        owner = module.owner
+        if owner and owner.is_active and self._has_management_role({role.code for role in owner.roles}):
+            return owner.id
+        return current_user.id
+
+    def _ensure_lesson_progress_rows(self, user_id: int) -> None:
+        existing_lesson_ids = {
+            row.lesson_id
+            for row in self.db.query(UserLessonProgress).filter(UserLessonProgress.user_id == user_id).all()
+        }
+        lessons = self.db.query(Lesson).order_by(Lesson.id.asc()).all()
+        for lesson in lessons:
+            if lesson.id in existing_lesson_ids:
+                continue
+            self.db.add(
+                UserLessonProgress(
+                    user_id=user_id,
+                    lesson_id=lesson.id,
+                    completed=False,
+                    completed_at=None,
+                )
+            )
+
+    def _ensure_collaborator_survey_assignments(self, user_id: int, created_by: int) -> None:
+        campaign = self._ensure_post_test_campaign(created_by)
+        templates = (
+            self.db.query(SurveyTemplate)
+            .filter(
+                SurveyTemplate.code.in_(
+                    [
+                        "functionality_checklist",
+                        "sst_awareness",
+                        "bidirectional_communication",
+                        "usability",
+                    ]
+                ),
+                SurveyTemplate.is_active.is_(True),
+            )
+            .all()
+        )
+        module_assignments = (
+            self.db.query(ModuleAssignment)
+            .join(ModuleAssignment.user)
+            .options(
+                joinedload(ModuleAssignment.user).joinedload(User.roles),
+                joinedload(ModuleAssignment.assigned_by_user).joinedload(User.roles),
+            )
+            .filter(ModuleAssignment.user_id == user_id)
+            .order_by(ModuleAssignment.module_id.asc())
+            .all()
+        )
+        primary_module_id = min((assignment.module_id for assignment in module_assignments), default=None)
+
+        for template in templates:
+            self._ensure_survey_assignment(
+                campaign_id=campaign.id,
+                template_id=template.id,
+                target_user_id=user_id,
+                respondent_user_id=user_id,
+                evaluator_user_id=None,
+                module_id=primary_module_id,
+            )
+
+        task_verification_template = (
+            self.db.query(SurveyTemplate)
+            .filter(SurveyTemplate.code == "task_verification", SurveyTemplate.is_active.is_(True))
+            .first()
+        )
+        if task_verification_template is None:
+            return
+
+        for assignment in module_assignments:
+            evaluator = assignment.assigned_by_user
+            if evaluator is None or not evaluator.is_active:
+                continue
+            evaluator_role_codes = {role.code for role in evaluator.roles}
+            if not evaluator_role_codes.intersection({"leader", "admin", "superadmin"}):
+                continue
+            self._ensure_survey_assignment(
+                campaign_id=campaign.id,
+                template_id=task_verification_template.id,
+                target_user_id=user_id,
+                respondent_user_id=evaluator.id,
+                evaluator_user_id=evaluator.id,
+                module_id=assignment.module_id,
+            )
+
+    def _ensure_post_test_campaign(self, created_by: int) -> SurveyCampaign:
+        campaign = (
+            self.db.query(SurveyCampaign)
+            .filter(SurveyCampaign.period_type == "post_test")
+            .order_by(SurveyCampaign.status.asc(), SurveyCampaign.id.desc())
+            .first()
+        )
+        if campaign is not None:
+            return campaign
+
+        now = datetime.utcnow()
+        campaign = SurveyCampaign(
+            code=f"post_test_auto_{now.strftime('%Y%m%d_%H%M%S')}",
+            name=f"Post test auto {now.strftime('%Y-%m-%d')}",
+            period_type="post_test",
+            status="active",
+            created_by=created_by,
+            start_at=now,
+        )
+        self.db.add(campaign)
+        self.db.flush()
+        return campaign
+
+    def _ensure_survey_assignment(
+        self,
+        campaign_id: int,
+        template_id: int,
+        target_user_id: int,
+        respondent_user_id: int,
+        evaluator_user_id: int | None,
+        module_id: int | None,
+    ) -> None:
+        existing = (
+            self.db.query(SurveyAssignment)
+            .filter(
+                SurveyAssignment.campaign_id == campaign_id,
+                SurveyAssignment.template_id == template_id,
+                SurveyAssignment.target_user_id == target_user_id,
+                SurveyAssignment.respondent_user_id == respondent_user_id,
+                SurveyAssignment.module_id == module_id,
+            )
+            .first()
+        )
+        if existing is not None:
+            return
+        self.db.add(
+            SurveyAssignment(
+                campaign_id=campaign_id,
+                template_id=template_id,
+                target_user_id=target_user_id,
+                respondent_user_id=respondent_user_id,
+                evaluator_user_id=evaluator_user_id,
+                module_id=module_id,
+                status="pending",
+            )
+        )
+
+    def _has_management_role(self, role_codes: set[str]) -> bool:
+        return bool(role_codes.intersection({"superadmin", "admin", "leader", "supervisor"}))
+
     def _get_user_with_relations(self, user_id: int | None = None, email: str | None = None) -> User | None:
         query = self.db.query(User).options(joinedload(User.roles).joinedload(Role.permissions))
         if user_id is not None:
@@ -282,6 +636,24 @@ class AuthService:
         if email is not None:
             return query.filter(User.email == email).first()
         return None
+
+    def _get_user_with_admin_relations(self, user_id: int) -> User:
+        user = (
+            self.db.query(User)
+            .options(
+                joinedload(User.roles).joinedload(Role.permissions),
+                joinedload(User.module_assignments),
+                joinedload(User.lesson_progress),
+                joinedload(User.survey_targets),
+                joinedload(User.survey_respondent_assignments),
+                joinedload(User.survey_evaluator_assignments),
+            )
+            .filter(User.id == user_id)
+            .first()
+        )
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
+        return user
 
     def _get_role_with_permissions(self, role_id: int) -> Role | None:
         return (

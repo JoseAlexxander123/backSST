@@ -33,4 +33,10 @@ app.include_router(survey_router)
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "service": "sst-backend"}
+    return {
+        "status": "ok",
+        "service": "sst-backend",
+        "storage_enabled": settings.storage_enabled,
+        "storage_provider": settings.STORAGE_PROVIDER,
+        "storage_bucket": settings.SUPABASE_STORAGE_BUCKET,
+    }

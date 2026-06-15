@@ -40,15 +40,15 @@ services:
       - key: LOCAL_ORIGIN_REGEX
         value: https?://(localhost|127\.0\.0\.1)(:\d+)?$
       - key: STORAGE_PROVIDER
-        sync: false
+        value: supabase_s3
       - key: SUPABASE_PROJECT_ID
-        sync: false
+        value: ugvbjpnaehuxptvuwsvl
       - key: SUPABASE_STORAGE_BUCKET
-        sync: false
+        value: sst-storage
       - key: SUPABASE_S3_ENDPOINT
-        sync: false
+        value: https://ugvbjpnaehuxptvuwsvl.supabase.co/storage/v1/s3
       - key: SUPABASE_S3_DIRECT_HOST
-        sync: false
+        value: https://ugvbjpnaehuxptvuwsvl.storage.supabase.co/storage/v1/s3
       - key: AWS_ACCESS_KEY_ID
         sync: false
       - key: AWS_SECRET_ACCESS_KEY

@@ -37,6 +37,7 @@ def health_check():
         "status": "ok",
         "service": "sst-backend",
         "storage_enabled": settings.storage_enabled,
+        "storage_credentials_present": settings.storage_credentials_present,
         "storage_provider": settings.STORAGE_PROVIDER,
         "storage_bucket": settings.SUPABASE_STORAGE_BUCKET,
     }

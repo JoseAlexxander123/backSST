@@ -1,3 +1,4 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,6 +38,34 @@ class Settings(BaseSettings):
     MAX_DOCUMENT_UPLOAD_MB: int = 20
     MAX_VIDEO_UPLOAD_MB: int = 200
 
+    @model_validator(mode="after")
+    def normalize_blank_values(self):
+        storage_defaults = {
+            "STORAGE_PROVIDER": "supabase_s3",
+            "SUPABASE_PROJECT_ID": "ugvbjpnaehuxptvuwsvl",
+            "SUPABASE_STORAGE_BUCKET": "sst-storage",
+            "SUPABASE_S3_ENDPOINT": "https://ugvbjpnaehuxptvuwsvl.supabase.co/storage/v1/s3",
+            "SUPABASE_S3_DIRECT_HOST": "https://ugvbjpnaehuxptvuwsvl.storage.supabase.co/storage/v1/s3",
+        }
+        nullable_fields = (
+            "SMTP_USERNAME",
+            "SMTP_PASSWORD",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+        )
+
+        for field_name, default_value in storage_defaults.items():
+            value = getattr(self, field_name)
+            if isinstance(value, str) and not value.strip():
+                setattr(self, field_name, default_value)
+
+        for field_name in nullable_fields:
+            value = getattr(self, field_name)
+            if isinstance(value, str) and not value.strip():
+                setattr(self, field_name, None)
+
+        return self
+
     @property
     def cors_origins(self) -> list[str]:
         origins: list[str] = []
@@ -56,6 +85,10 @@ class Settings(BaseSettings):
             and self.AWS_ACCESS_KEY_ID
             and self.AWS_SECRET_ACCESS_KEY
         )
+
+    @property
+    def storage_credentials_present(self) -> bool:
+        return bool(self.AWS_ACCESS_KEY_ID and self.AWS_SECRET_ACCESS_KEY)
 
 
 settings = Settings()
